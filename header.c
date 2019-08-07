@@ -1051,7 +1051,7 @@ static sam_hrec_type_t *sam_hrecs_find_type_pos(sam_hrecs_t *hrecs,
 
 size_t sam_hdr_length(sam_hdr_t *bh) {
     if (!bh || -1 == sam_hdr_rebuild(bh))
-        return -1;
+        return SIZE_MAX;
 
     return bh->l_text;
 }
@@ -1071,7 +1071,7 @@ int sam_hdr_nref(const sam_hdr_t *bh) {
 }
 
 /*
- * Reconstructs the kstring from the header hash table.
+ * Reconstructs the text representation from the header hash table.
  * Returns 0 on success
  *        -1 on failure
  */
@@ -1084,8 +1084,10 @@ int sam_hdr_rebuild(sam_hdr_t *bh) {
         return bh->text ? 0 : -1;
 
     if (hrecs->refs_changed >= 0) {
-        if (rebuild_target_arrays(bh) < 0)
+        if (rebuild_target_arrays(bh) < 0) {
+            hts_log_error("Header target array rebuild has failed");
             return -1;
+        }
     }
 
     /* If header text wasn't changed or header is empty, don't rebuild it. */
@@ -1098,6 +1100,7 @@ int sam_hdr_rebuild(sam_hdr_t *bh) {
     kstring_t ks = KS_INITIALIZER;
     if (sam_hrecs_rebuild_text(hrecs, &ks) != 0) {
         KS_FREE(&ks);
+        hts_log_error("Header text rebuild has failed");
         return -1;
     }
 
@@ -1447,7 +1450,7 @@ int sam_hdr_update_line(sam_hdr_t *bh, const char *type,
     return ret;
 }
 
-int sam_hdr_keep_line(sam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
+int sam_hdr_remove_except(sam_hdr_t *bh, const char *type, const char *ID_key, const char *ID_value) {
     sam_hrecs_t *hrecs;
     if (!bh || !type)
         return -1;
@@ -1569,12 +1572,15 @@ int sam_hdr_count_lines(sam_hdr_t *bh, const char *type) {
     case 'S':
         if (type[1] == 'Q')
             return bh->hrecs->nref;
+        break;
     case 'R':
         if (type[1] == 'G')
             return bh->hrecs->nrg;
+        break;
     case 'P':
         if (type[1] == 'G')
             return bh->hrecs->npg;
+        break;
     default:
         break;
     }
@@ -1590,6 +1596,101 @@ int sam_hdr_count_lines(sam_hdr_t *bh, const char *type) {
     }
 
     return count;
+}
+
+int sam_hdr_line_index(sam_hdr_t *bh,
+                       const char *type,
+                       const char *key) {
+    sam_hrecs_t *hrecs;
+    if (!bh || !type || !key)
+        return -2;
+
+    if (!(hrecs = bh->hrecs)) {
+        if (sam_hdr_fill_hrecs(bh) != 0)
+            return -2;
+        hrecs = bh->hrecs;
+    }
+
+    khint_t k;
+    int idx = -1;
+    switch (type[0]) {
+    case 'S':
+        if (type[1] == 'Q') {
+            k = kh_get(m_s2i, hrecs->ref_hash, key);
+            if (k != kh_end(hrecs->ref_hash))
+                idx = kh_val(hrecs->ref_hash, k);
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    case 'R':
+        if (type[1] == 'G') {
+            k = kh_get(m_s2i, hrecs->rg_hash, key);
+            if (k != kh_end(hrecs->rg_hash))
+                idx = kh_val(hrecs->rg_hash, k);
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    case 'P':
+        if (type[1] == 'G') {
+            k = kh_get(m_s2i, hrecs->pg_hash, key);
+            if (k != kh_end(hrecs->pg_hash))
+                idx = kh_val(hrecs->pg_hash, k);
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    default:
+        hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+    }
+
+    return idx;
+}
+
+const char *sam_hdr_line_name(sam_hdr_t *bh,
+                              const char *type,
+                              int pos) {
+    sam_hrecs_t *hrecs;
+    if (!bh || !type || pos < 0)
+        return NULL;
+
+    if (!(hrecs = bh->hrecs)) {
+        if (sam_hdr_fill_hrecs(bh) != 0)
+            return NULL;
+        hrecs = bh->hrecs;
+    }
+
+    switch (type[0]) {
+    case 'S':
+        if (type[1] == 'Q') {
+            if (pos < hrecs->nref)
+                return hrecs->ref[pos].name;
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    case 'R':
+        if (type[1] == 'G') {
+            if (pos < hrecs->nrg)
+                return hrecs->rg[pos].name;
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    case 'P':
+        if (type[1] == 'G') {
+            if (pos < hrecs->npg)
+                return hrecs->pg[pos].name;
+        } else {
+            hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+        }
+        break;
+    default:
+        hts_log_warning("Type '%s' not supported. Only @SQ, @RG and @PG lines are indexed", type);
+    }
+
+    return NULL;
 }
 
 /* ==== Key:val level methods ==== */

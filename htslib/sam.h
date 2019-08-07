@@ -188,10 +188,9 @@ typedef struct {
     int32_t pos;
     uint16_t bin;
     uint8_t qual;
-    uint8_t l_qname;
-    uint16_t flag;
-    uint8_t unused1;
     uint8_t l_extranul;
+    uint16_t flag;
+    uint16_t l_qname;
     uint32_t n_cigar;
     int32_t l_qseq;
     int32_t mtid;
@@ -381,7 +380,7 @@ int sam_hdr_write(samFile *fp, const sam_hdr_t *h) HTS_RESULT_USED;
 
 /// Returns the current length of the header text.
 /*!
- * @return  >= 0 on success, -1 on failure
+ * @return  >= 0 on success, SIZE_MAX on failure
  */
 size_t sam_hdr_length(sam_hdr_t *h);
 
@@ -532,7 +531,7 @@ int sam_hdr_remove_line_pos(sam_hdr_t *h, const char *type, int position);
 int sam_hdr_update_line(sam_hdr_t *h, const char *type,
         const char *ID_key, const char *ID_value, ...);
 
-/// Remove all lines of a given type from a header, except one matching an ID
+/// Remove all lines of a given type from a header, except the one matching an ID
 /*!
  * @param type      Type of the searched line. Eg. "SQ"
  * @param ID_key    Tag key defining the line. Eg. "SN"
@@ -541,18 +540,45 @@ int sam_hdr_update_line(sam_hdr_t *h, const char *type,
  *
  * Remove all lines of type <type> from the header, except the one
  * specified by tag:value, i.e. the @SQ line containing "SN:ref1".
+ *
+ * If no line matches the key:value ID, all lines of the given type are removed.
+ * To remove all lines of a given type, use NULL for both ID_key and ID_value.
  */
-int sam_hdr_keep_line(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value);
+int sam_hdr_remove_except(sam_hdr_t *h, const char *type, const char *ID_key, const char *ID_value);
 
 /// Remove header lines of a given type, except those in a given ID set
 /*!
  * @param type  Type of the searched line. Eg. "RG"
  * @param id    Tag key defining the line. Eg. "ID"
  * @param rh    Hash set initialised by the caller with the values to be kept.
+ *              See description for how to create this.
  * @return      0 on success, -1 on failure
  *
  * Remove all lines of type <type> from the header, except the one
- * specified in the hash set rh.
+ * specified in the hash set @p rh.
+ * Declaration of @rh is done using KHASH_SET_INIT_STR macro. Eg.
+ * @code{.c}
+ *              KHASH_SET_INIT_STR(remove)
+ *              typedef khash_t(remove) *remhash_t;
+ *
+ *              void your_method() {
+ *                  samFile *sf = sam_open("alignment.bam", "r");
+ *                  sam_hdr_t *h = sam_hdr_read(sf);
+ *                  remhash_t rh = kh_init(remove);
+ *                  int ret = 0;
+ *                  kh_put(remove, rh, strdup("chr2"), &ret);
+ *                  kh_put(remove, rh, strdup("chr3"), &ret);
+ *                  if (sam_hdr_remove_lines(h, "SQ", "SN", rh) == -1)
+ *                      fprintf(stderr, "Error removing lines\n");
+ *                  khint_t k;
+ *                  for (k = 0; k < kh_end(rh); ++k)
+ *                     if (kh_exist(rh, k)) free((char*)kh_key(rh, k));
+ *                  kh_destroy(remove, rh);
+ *                  sam_hdr_destroy(h);
+ *                  sam_close(sf);
+ *              }
+ * @endcode
+ *
  */
 int sam_hdr_remove_lines(sam_hdr_t *h, const char *type, const char *id, void *rh);
 
@@ -563,6 +589,24 @@ int sam_hdr_remove_lines(sam_hdr_t *h, const char *type, const char *id, void *r
  * @return  Number of lines of this type on success; -1 on failure
  */
 int sam_hdr_count_lines(sam_hdr_t *h, const char *type);
+
+/// Index of the line for the types that have dedicated look-up tables (SQ, RG, PG)
+/*!
+ * @param h     BAM header
+ * @param type  Type of the searched line. Eg. "RG"
+ * @param key   The value of the identifying key. Eg. "rg1"
+ * @return  0-based index on success; -1 if line does not exist; -2 on failure
+ */
+int sam_hdr_line_index(sam_hdr_t *bh, const char *type, const char *key);
+
+/// Id key of the line for the types that have dedicated look-up tables (SQ, RG, PG)
+/*!
+ * @param h     BAM header
+ * @param type  Type of the searched line. Eg. "RG"
+ * @param pos   Zero-based index inside the type group. Eg. 2 (for the third RG line)
+ * @return  Valid key string on success; NULL on failure
+ */
+const char *sam_hdr_line_name(sam_hdr_t *bh, const char *type, int pos);
 
 /* ==== Key:val level methods ==== */
 
